@@ -50,37 +50,44 @@ const handleJWT = async (req: Request, res: Response, next: NextFunction) => {
   const token = req.cookies.userToken;
 
   try {
-    
     if (token) {
-      // Verify the JWT
+      try {
+        // Verify the token
+        const decoded = jwt.verify(token, JWT_TOKEN) as CustomJwtPayload;
+        (req as CustomRequest).userId = decoded.userId;
+      } catch (error) {
+        if (error instanceof jwt.TokenExpiredError) {
+          console.log("Token expired. Generating a new one.");
 
-        const decoded =  jwt.verify(token, JWT_TOKEN);
-        (req as CustomRequest).userId = (decoded as CustomJwtPayload).userId
-      
-      
+          // Generate a new token
+          const newUserId = uuidv4(); // Optionally, use the existing userId if you persist it in a database
+          const newToken = jwt.sign({ userId: newUserId }, JWT_TOKEN, { expiresIn: '7d' });
+
+          // Set the new token in cookies
+          res.cookie('userToken', newToken, { httpOnly: true, secure: false }); // Set `secure: true` for HTTPS in production
+          (req as CustomRequest).userId = newUserId;
+        } else {
+          console.error('Invalid token:', error);
+          return res.status(401).json({ message: 'Invalid token. Please log in again.' });
+        }
+      }
     } else {
-      // No JWT found, create a new UUID and JWT
+      // No token found, generate a new one
       const newUserId = uuidv4();
+      const newToken = jwt.sign({ userId: newUserId }, JWT_TOKEN, { expiresIn: '7d' });
 
-
-
-      const newToken = jwt.sign({ userId: newUserId }, JWT_TOKEN , { expiresIn: '7d' });
-  
-      // Store the new token in cookies
-      res.cookie('userToken', newToken, { httpOnly: true, secure: false }); // Set secure: true for HTTPS
-  
-      // Attach user info to request
+      // Set the new token in cookies
+      res.cookie('userToken', newToken, { httpOnly: true, secure: false });
       (req as CustomRequest).userId = newUserId;
-
     }
 
-    next()
+    next(); // Pass control to the next middleware
   } catch (error) {
-    console.log(error)
+    console.error('Error in handleJWT middleware:', error);
+    res.status(500).json({ message: 'Internal server error' });
   }
-
-  
 };
+
 app.use(handleJWT);
 
 
