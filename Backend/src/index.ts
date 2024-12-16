@@ -15,6 +15,9 @@ let morgan = require("morgan");
 const PORT = process.env.PORT  || 5000
 const JWT_TOKEN = process.env.JWT_SECRET || ""
 
+console.log(jwt);
+
+
 const app = express();
 
 import {  writeUserData, readUserData, storage, upload } from './utils';
@@ -76,8 +79,25 @@ const handleJWT = async (req: Request, res: Response, next: NextFunction) => {
 
     next()
   } catch (error) {
-    console.log(error)
+    if (error instanceof jwt.TokenExpiredError) {
+      console.error("JWT expired:", error.expiredAt);
+
+      // Generate a new token for the user
+      const decoded = jwt.decode(token) as CustomJwtPayload;
+      if (decoded && decoded.userId) {
+        const newToken = jwt.sign({ userId: decoded.userId }, JWT_TOKEN, { expiresIn: '7d' });
+        res.cookie('userToken', newToken, { httpOnly: true, secure: false });
+        (req as CustomRequest).userId = decoded.userId;
+        next(); // Proceed with the request
+      } else {
+        res.status(401).send("Token is invalid and cannot be refreshed.");
+      }
+    } else {
+      console.error("JWT handling error:", error);
+      res.status(401).send("Unauthorized");
+    }
   }
+  
 
   
 };
@@ -91,11 +111,13 @@ app.post('/upload', upload.single('image'), async (req: Request, res: Response) 
   const userId = customReq.userId;
 
   if (!userId) {
-    return res.status(401).send('User ID not found.');
+    res.status(401).send('User ID not found.');
+    return;
   }
 
   if (!req.file) {
-    return res.status(400).send('No file uploaded.');
+    res.status(400).send('No file uploaded.');
+    return;
   }
 
   const originalFilePath = path.join(__dirname, 'uploads', `${userId}-${req.file.filename}`);
@@ -142,7 +164,8 @@ app.post('/process', async (req: Request, res: Response) => {
   const userId = customReq.userId;
 
   if (!userId) {
-    return res.status(401).send('User ID not found.');
+    res.status(401).send('User ID not found.');
+    return;
   }
 
   // Retrieve user data to get original image path
@@ -150,7 +173,8 @@ app.post('/process', async (req: Request, res: Response) => {
   const userImageData = userData[userId?.toString()];
 
   if (!userImageData || !userImageData.originalImage) {
-    return res.status(400).send('No image found for the user.');
+    res.status(400).send('No image found for the user.');
+    return;
   }
 
   const originalFilePath = userImageData.originalImage;
@@ -199,7 +223,8 @@ app.get('/download', async (req: Request, res: Response) => {
   const userId = customReq.userId;
 
   if (!userId) {
-    return res.status(401).send('User ID not found.');
+    res.status(401).send('User ID not found.');
+    return;
   }
 
   // Read user data to get the original image path
@@ -207,7 +232,8 @@ app.get('/download', async (req: Request, res: Response) => {
   const userImages = userData[userId.toString()];
 
   if (!userImages || !userImages.originalImage) {
-    return res.status(404).send('Image not found.');
+    res.status(404).send('Image not found.');
+    return;
   }
 
   const { brightness = 1, hue = 0, saturation = 1, rotation = 0, format = "jpeg" } = req.query; // Parameters passed from the frontend
@@ -215,7 +241,8 @@ app.get('/download', async (req: Request, res: Response) => {
 
   // Ensure the file exists
   if (!fs.existsSync(originalFilePath)) {
-    return res.status(404).send('File not found.');
+    res.status(404).send('File not found.');
+    return;
   }
 
   // Create a temporary file for the processed image
@@ -255,12 +282,20 @@ app.get('/download', async (req: Request, res: Response) => {
 
   } catch (error) {
     console.error('Error processing image:', error);
-    return res.status(500).send('Error processing the image.');
+    res.status(500).send('Error processing the image.');
+    return;
   }
 });
 
 
-app.use('/uploads', express.static('src/uploads')); // Serve static files from 'uploads' folder
+app.use('/uploads', (req: Request, res: Response, next: NextFunction) => {
+  const customReq = req as CustomRequest;
+  const userId = customReq.userId;
+  if (!userId) { res.status(401).send('Unauthorized access.');
+    return;
+  }
+  next();
+}, express.static('src/uploads')); // Serve static files from 'uploads' folder
 
 // Start server
 app.listen(PORT, () => {
